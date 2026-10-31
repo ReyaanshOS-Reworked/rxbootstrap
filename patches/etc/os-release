@@ -1,0 +1,11 @@
+NAME="ReyaanshOS-Reworked"
+PRETTY_NAME="ReyaanshOS-Reworked 26.12"
+ID=reyaanshos
+ID_LIKE=debian
+VERSION="26.12"
+VERSION_ID="26.12"
+VERSION_CODENAME=bookworm
+HOME_URL="https://github.com/ReyaanshOS-Reworked"
+DOCUMENTATION_URL="https://ReyaanshOS-Reworked.github.io"
+SUPPORT_URL="https://github.com/ReyaanshOS-Reworked"
+BUG_REPORT_URL="https://github.com/ReyaanshOS-Reworked"
