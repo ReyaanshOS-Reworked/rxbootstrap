@@ -1,98 +1,79 @@
-name: Build ReyaanshOS
+name: RXBootstrap - ReyaanshOS Builder
 
 on:
   workflow_dispatch:
     inputs:
-      release_version:
-        description: "ReyaanshOS version (e.g. 26.12)"
-        required: true
-        type: string
-
-      release_tag:
-        description: "Git release tag (leave blank to use vVERSION)"
-        required: false
-        type: string
-
-      release_notes:
-        description: "Release notes"
-        required: false
-        type: string
-
       arch:
         description: "Target architecture"
-        required: true
         type: choice
+        required: true
+        default: amd64
         options:
           - amd64
           - arm64
-        default: amd64
 
       de:
         description: "Desktop environment"
-        required: true
         type: choice
+        required: true
+        default: none
         options:
           - none
           - plasma-mobile
           - plasma-desktop
-        default: none
 
       hostname:
-        description: "Default system hostname"
-        required: true
+        description: "System hostname"
         type: string
+        required: true
         default: reyaanshos
 
       add:
-        description: "Additional packages (space-separated)"
-        required: false
+        description: "Extra packages (comma-separated)"
         type: string
+        default: ""
 
       create_image:
-        description: "Create bootable disk image"
-        required: true
+        description: "Create bootable UEFI image"
         type: boolean
         default: true
 
       img_size:
-        description: "Disk image size"
-        required: true
+        description: "Image size (e.g. 8G, 16G)"
         type: string
         default: 8G
 
       force:
-        description: "Force rebuild"
-        required: true
+        description: "Force rootfs download and extraction"
         type: boolean
         default: false
 
       keep_tmp:
         description: "Keep temporary build files"
-        required: true
-        type: boolean
-        default: false
-
-      prerelease:
-        description: "Mark this release as a prerelease"
-        required: true
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build ReyaanshOS (${{ inputs.arch }})
-    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
 
     steps:
+      # Checkout repository
       - name: Checkout RXBootstrap
         uses: actions/checkout@v4
 
-      - name: Install host dependencies
+      # Install host dependencies
+      - name: Install dependencies
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             python3 \
             parted \
@@ -102,46 +83,48 @@ jobs:
             util-linux \
             coreutils
 
-      - name: Validate release information
+          # ARM64 cross-architecture support
+          if [[ "$ARCH" == "arm64" ]]; then
+            sudo apt-get install -y \
+              qemu-user-static \
+              binfmt-support
+
+            sudo update-binfmts --enable qemu-aarch64 || true
+          fi
+
+      # Validate inputs
+      - name: Validate configuration
         env:
-          VERSION: ${{ inputs.release_version }}
-          TAG: ${{ inputs.release_tag }}
-          IMAGE_SIZE: ${{ inputs.img_size }}
           HOSTNAME: ${{ inputs.hostname }}
+          IMG_SIZE: ${{ inputs.img_size }}
+          ADD: ${{ inputs.add }}
         run: |
-          set -euo pipefail
+          set -e
 
-          if [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]*$ ]]; then
-            echo "Invalid ReyaanshOS version: $VERSION"
-            exit 1
-          fi
-
-          if [[ -z "$TAG" ]]; then
-            TAG="v${VERSION}"
-          fi
-
-          git check-ref-format "refs/tags/$TAG"
-
-          if [[ ! "$IMAGE_SIZE" =~ ^[0-9]+[KMGTP]?$ ]]; then
-            echo "Invalid image size: $IMAGE_SIZE"
-            exit 1
-          fi
-
-          if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
+          if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}$ ]]; then
             echo "Invalid hostname"
             exit 1
           fi
 
-          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          if [[ ! "$IMG_SIZE" =~ ^[0-9]+[KMGTP]?$ ]]; then
+            echo "Invalid image size"
+            exit 1
+          fi
 
-      - name: Build rootfs / disk image
+          if [[ "$ADD" =~ [^a-zA-Z0-9_+.,:-] ]]; then
+            echo "Invalid package list"
+            exit 1
+          fi
+
+      # Run RXBootstrap
+      - name: Build ReyaanshOS
         env:
           ARCH: ${{ inputs.arch }}
           DE: ${{ inputs.de }}
           HOSTNAME: ${{ inputs.hostname }}
-          ADD_PACKAGES: ${{ inputs.add }}
+          ADD: ${{ inputs.add }}
           CREATE_IMAGE: ${{ inputs.create_image }}
-          IMAGE_SIZE: ${{ inputs.img_size }}
+          IMG_SIZE: ${{ inputs.img_size }}
           FORCE: ${{ inputs.force }}
           KEEP_TMP: ${{ inputs.keep_tmp }}
           ROOT_PASSWORD: ${{ secrets.RXBOOTSTRAP_ROOT_PASSWORD }}
@@ -154,12 +137,12 @@ jobs:
             --hostname "$HOSTNAME"
           )
 
-          if [[ -n "$ADD_PACKAGES" ]]; then
-            args+=(--add "$ADD_PACKAGES")
+          if [[ -n "$ADD" ]]; then
+            args+=(--add "$ADD")
           fi
 
           if [[ "$CREATE_IMAGE" == "true" ]]; then
-            args+=(--create-image --img-size "$IMAGE_SIZE")
+            args+=(--create-image --img-size "$IMG_SIZE")
           fi
 
           if [[ "$FORCE" == "true" ]]; then
@@ -174,48 +157,30 @@ jobs:
             args+=(--root-password "$ROOT_PASSWORD")
           fi
 
+          echo "=================================="
+          echo " ReyaanshOS Build Configuration"
+          echo "=================================="
+          echo "Architecture : $ARCH"
+          echo "Desktop      : $DE"
+          echo "Hostname     : $HOSTNAME"
+          echo "Image        : $CREATE_IMAGE"
+          echo "Image size   : $IMG_SIZE"
+          echo "=================================="
+
           sudo python3 rxbootstrap.py "${args[@]}"
 
-      - name: Check build output
+      # Show generated files
+      - name: List build outputs
         run: |
-          set -euo pipefail
+          echo "Generated files:"
+          find out -type f -printf '%p (%s bytes)\n'
 
-          if [[ ! -d out ]] || [[ -z "$(find out -maxdepth 1 -type f -print -quit)" ]]; then
-            echo "No build files found in out/"
-            exit 1
-          fi
-
-          echo "Build output:"
-          ls -lh out/
-
-      - name: Upload build artifact
+      # Upload artifacts
+      - name: Upload ReyaanshOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ReyaanshOS-${{ inputs.release_version }}-${{ inputs.arch }}
-          path: out/*
+          name: ReyaanshOS-${{ inputs.arch }}-${{ inputs.de }}-${{ github.run_number }}
+          path: out/
           if-no-files-found: error
           compression-level: 0
-          retention-days: 30
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ReyaanshOS ${{ inputs.release_version }}
-          body: |
-            # ReyaanshOS ${{ inputs.release_version }}
-
-            **Architecture:** ${{ inputs.arch }}
-            **Desktop Environment:** ${{ inputs.de }}
-            **Hostname:** ${{ inputs.hostname }}
-
-            ${{ inputs.release_notes }}
-
-            ---
-            Built automatically using RXBootstrap.
-          target_commitish: ${{ github.sha }}
-          files: out/*
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          generate_release_notes: true
-          prerelease: ${{ inputs.prerelease }}
+          retention-days: 14
